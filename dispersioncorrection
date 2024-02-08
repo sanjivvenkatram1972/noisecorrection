@@ -1,0 +1,78 @@
+'''
+Program below corrects noisy signals using a modified low pass filter. It futher sends both
+the corrected and uncorrected information to Power BI. The Power BI tile is further 
+embedded in Power Apps to complete the loop. The input to this code can also be fron Power Apps
+through Azure IoT Central and Power Automate. This components is not shown below.
+''' 
+
+from time import sleep
+import RPi.GPIO as GPIO
+import pigpio
+import time
+import RPi.GPIO as GPIO # get access to GPIO pins to control devices external to the Pi - LEDs etc
+from read_RPM import reader # module designed to read pulses and determine speed
+import requests
+from datetime import datetime
+
+# setup realtime streaming dataset, get api endpoint
+var_restapi = "https://api.powerbi.com/beta/c78f1d30-2abc-455f-9a81-36d8b957f8b4/datasets/aa93ab73-84b3-4417-97c7-a0cadc7de0c8/rows?tenant=c78f1d30-2abc-455f-9a81-36d8b957f8b4&experience=power-bi&key=5%2Fhn1pYsBVZh0seBpN5x3f0cPLzdMAWGdgOeScn3U%2BoCI3pFr19WCwaTv6W3OTZRuAsvR3i1IszDbhCL3VL4%2FQ%3D%3D"
+
+var_pi = pigpio.pi()
+var_rpm_gpio = 21 # indicated GPIO to send pulse
+SAMPLE_TIME = 2.0
+tach = reader(var_pi, var_rpm_gpio) # instantiate reader
+
+var_check_status = input("check if battery is connected: ",)
+print(var_check_status)
+
+var_servoPin = 15
+var_pi.set_servo_pulsewidth(var_servoPin, 1800) # calibrate highend of pulse - MAKE SURE BATTERY IS NOT PLUGGED IN BEFORE YOU EXECUTE THIS
+sleep(2)
+
+var_connect_battery = input("Connect battery and hit enter: ",)
+sleep(5)
+
+print("battery connected")
+
+var_pi.set_servo_pulsewidth(var_servoPin, 1000) # calibrate highend of pulse
+sleep(2)
+
+var_pwm = input("enter value pwm : ",)
+var_pi.set_servo_pulsewidth(var_servoPin, var_pwm)
+
+var_prev_speedval = 7500 # initialize variable, this is trial and error for the first setup
+
+try:
+    while True:
+        
+        var_threshold = var_prev_speedval * 0.25 #estabish a threshold beyond which values are considered noisy
+        var_speed_actual = tach.RPM() # read actual speed
+                
+        var_curr_speedval = var_speed_actual #create a variable & input actual speed as current speed
+        var_del_speedval = var_curr_speedval - var_prev_speedval # calculate the delta between current speed and initialized speed
+        
+        if abs(var_del_speedval) > var_threshold:
+            var_curr_speedval = var_prev_speedval #if delta of speeds is greater than threshold, set vurrent speed to be threhold speed
+        else:
+            var_curr_speedval = var_curr_speedval
+        
+        var_prev_speedval = var_curr_speedval #update prior speed
+        
+        print(var_speed_actual)
+        var_now = datetime.strftime(datetime.now(), "%Y-%m-%dT%H:%M:%S%Z") #capture formatted date and time in a variable
+        
+        # add a variable to capture final speed and uncorrected speed and date & time.
+        var_data = '[{{"var_time":"{0}","var_finalspeed":"{1:0.1f}","var_uncorrectedspeed":"{2:0.1f}"}}]'.format(var_now,var_curr_speedval,var_speed_actual)
+        
+        # post to Power BI
+        var_req = requests.post(var_restapi,var_data)
+        
+        time.sleep(0)
+        
+except KeyboardInterrupt:
+     print("stopping")
+     
+finally:
+     var_pi.set_servo_pulsewidth(var_servoPin,0)
+     var_pi.stop()
+     print("GPIO cleanup complete")
